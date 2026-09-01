@@ -1,0 +1,712 @@
+/**
+ * ============================================================
+ * SISTEM ABSENSI KANTOR — Backend (Kode.gs)
+ * Fitur: Facial Recognition, Fingerprint, Review, Master Data, Laporan
+ * Versi: 1.0
+ * ============================================================
+ */
+
+// ── Konstanta Global ──
+const APP_NAME = 'Sistem Absensi Kantor';
+const FOLDER_NAME = 'SistemAbsensiKantor';
+const SS_NAME = 'DB_Absensi_Kantor';
+
+// ── Helper: Include HTML Partial ──
+function include(filename) {
+  return HtmlService.createHtmlOutputFromFile(filename).getContent();
+}
+
+// ── Helper: Response Builder ──
+function createResponse(success, data = null, message = '') {
+  return { success: success, data: data, message: message };
+}
+
+// ── Helper: Generate UUID ──
+function generateUUID() {
+  return Utilities.getUuid();
+}
+
+// ── Helper: Get Spreadsheet ──
+function getSpreadsheet() {
+  try {
+    const folders = DriveApp.getFoldersByName(FOLDER_NAME);
+    if (!folders.hasNext()) {
+      throw new Error('Folder aplikasi belum dibuat. Jalankan setupAppEnvironment().');
+    }
+    const files = folders.next().getFilesByName(SS_NAME);
+    if (!files.hasNext()) {
+      throw new Error('Spreadsheet belum dibuat. Jalankan setupAppEnvironment().');
+    }
+    return SpreadsheetApp.open(files.next());
+  } catch (error) {
+    throw new Error('Error membuka spreadsheet: ' + error.message);
+  }
+}
+
+/**
+ * ============================================================
+ * ENTRY POINT & SETUP
+ * ============================================================
+ */
+
+function doGet(e) {
+  const html = HtmlService.createTemplateFromFile('Index')
+    .evaluate()
+    .setTitle(APP_NAME)
+    .addMetaTag('viewport', 'width=device-width, initial-scale=1')
+    .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
+  return html;
+}
+
+function setupAppEnvironment() {
+  try {
+    // 1. Buat atau temukan Folder Utama di Drive
+    const folders = DriveApp.getFoldersByName(FOLDER_NAME);
+    const mainFolder = folders.hasNext()
+      ? folders.next()
+      : DriveApp.createFolder(FOLDER_NAME);
+    Logger.log('📁 Folder: ' + mainFolder.getUrl());
+
+    // 2. Buat sub-folder untuk foto wajah & berkas lampiran
+    let fotoFolder = mainFolder.getFoldersByName('Foto_Wajah_Guru').hasNext()
+      ? mainFolder.getFoldersByName('Foto_Wajah_Guru').next()
+      : mainFolder.createFolder('Foto_Wajah_Guru');
+    
+    let lampiranFolder = mainFolder.getFoldersByName('Lampiran').hasNext()
+      ? mainFolder.getFoldersByName('Lampiran').next()
+      : mainFolder.createFolder('Lampiran');
+
+    // 3. Buat atau temukan Spreadsheet
+    let ss;
+    const files = mainFolder.getFilesByName(SS_NAME);
+    if (files.hasNext()) {
+      ss = SpreadsheetApp.open(files.next());
+    } else {
+      ss = SpreadsheetApp.create(SS_NAME);
+      DriveApp.getFileById(ss.getId()).moveTo(mainFolder);
+    }
+    Logger.log('📊 Spreadsheet: ' + ss.getUrl());
+
+    // 4. Buat sheet-sheet yang dibutuhkan dengan header + data dummy
+    const now = new Date().toLocaleDateString('id-ID');
+    
+    createSheetIfNotExists(ss, 'Data_Guru',
+      ['ID', 'Nama', 'NIP', 'No_HP', 'Email', 'Foto_Wajah_URL', 'Data_Sidik_Jari', 'Status_Aktif', 'Tgl_Masuk', 'Role'],
+      [generateUUID(), 'Dr. Robert Chen', '19800512 2005011 003', '+62 812-3456-7890', 'r.chen@globalintl.edu', '', '', 'Aktif', now, 'Guru']
+    );
+
+    createSheetIfNotExists(ss, 'Rekam_Absensi',
+      ['ID_Absensi', 'ID_Guru', 'Nama_Guru', 'Tanggal', 'Jam_Masuk', 'Jam_Keluar', 'Status_Verifikasi', 'Tipe_Verifikasi', 'Catatan_Status', 'Is_Lembur', 'Durasi_Lembur_Jam'],
+      [generateUUID(), '', '', now, '07:15', '', 'Berhasil', 'Wajah', 'Match 95%', 'Tidak', 0]
+    );
+
+    createSheetIfNotExists(ss, 'Hari_Libur',
+      ['ID', 'Tanggal', 'Keterangan', 'Tipe', 'Dibuat_Oleh'],
+      [generateUUID(), now, 'Hari Raya Contoh', 'Libur Nasional', 'admin@school.com']
+    );
+
+    createSheetIfNotExists(ss, 'Akun_Pengguna',
+      ['ID', 'Email', 'Nama_Lengkap', 'Role', 'Status'],
+      [generateUUID(), 'admin@school.com', 'Admin Super', 'Admin Super', 'Aktif'],
+      [generateUUID(), 'kepsek@school.com', 'Kepala Sekolah', 'Kepala Sekolah', 'Aktif'],
+      [generateUUID(), 'tu@school.com', 'Tata Usaha', 'TU', 'Aktif']
+    );
+
+    createSheetIfNotExists(ss, 'AppConfig',
+      ['Key', 'Value'],
+      ['appName', APP_NAME],
+      ['folderId', mainFolder.getId()],
+      ['uploadFolderId', lampiranFolder.getId()],
+      ['fotoFolderId', fotoFolder.getId()],
+      ['spreadsheetId', ss.getId()],
+      ['logoUrl', ''],
+      ['adminEmail', Session.getActiveUser().getEmail()],
+      ['whatsappApiKey', ''],
+      ['whatsappProvider', 'twilio']
+    );
+
+    // Hapus Sheet1 default
+    const defaultSheet = ss.getSheetByName('Sheet1');
+    if (defaultSheet && ss.getSheets().length > 1) {
+      ss.deleteSheet(defaultSheet);
+    }
+
+    Logger.log('✅ Setup selesai!');
+    Logger.log('📁 Folder ID: ' + mainFolder.getId());
+    Logger.log('📊 Spreadsheet ID: ' + ss.getId());
+
+    return createResponse(true, {
+      folderId: mainFolder.getId(),
+      spreadsheetId: ss.getId()
+    }, 'Setup berhasil! Aplikasi siap digunakan.');
+
+  } catch (error) {
+    Logger.log('❌ Error setup: ' + error.message);
+    return createResponse(false, null, error.message);
+  }
+}
+
+/**
+ * Buat sheet jika belum ada, lengkap dengan header dan data dummy.
+ */
+function createSheetIfNotExists(ss, sheetName, headers, ...dataRows) {
+  let sheet = ss.getSheetByName(sheetName);
+  if (!sheet) {
+    sheet = ss.insertSheet(sheetName);
+    sheet.appendRow(headers);
+    dataRows.forEach(row => sheet.appendRow(row));
+    
+    // Format header
+    sheet.getRange(1, 1, 1, headers.length)
+      .setFontWeight('bold')
+      .setBackground('#1e3a8a')
+      .setFontColor('#ffffff');
+    
+    // Auto-resize columns
+    headers.forEach((_, i) => sheet.autoResizeColumn(i + 1));
+  }
+  return sheet;
+}
+
+/**
+ * ============================================================
+ * ABSENSI — Verifikasi Wajah & Sidik Jari
+ * ============================================================
+ */
+
+function recordAbsensi(guruId, guruNama, tipeVerifikasi, statusVerifikasi, catatanStatus) {
+  try {
+    const ss = getSpreadsheet();
+    const sheet = ss.getSheetByName('Rekam_Absensi');
+    const now = new Date();
+    const tanggalHariIni = now.toLocaleDateString('id-ID');
+    const jamSekarang = now.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' });
+
+    // Cek apakah guru sudah absen hari ini (untuk jam masuk vs jam keluar)
+    const data = sheet.getDataRange().getValues();
+    const rekamHariIni = data.slice(1).filter(row => 
+      row[1] === guruId && row[3] === tanggalHariIni
+    );
+
+    let isLembur = checkIsLembur(tanggalHariIni);
+    let durasiLembur = 0;
+
+    // Jika belum ada record hari ini → jam masuk
+    // Jika sudah ada → jam keluar
+    let jamMasuk = '', jamKeluar = '';
+    if (rekamHariIni.length === 0) {
+      jamMasuk = jamSekarang;
+      jamKeluar = '';
+    } else {
+      jamMasuk = rekamHariIni[0][4]; // Ambil jam masuk yang ada
+      jamKeluar = jamSekarang;
+      // Hitung lembur: if jam keluar > 16:00 → ada lembur
+      const jamKeluar_hours = parseInt(jamSekarang.split(':')[0]);
+      if (jamKeluar_hours > 16) {
+        durasiLembur = jamKeluar_hours - 16;
+        isLembur = true;
+      }
+    }
+
+    const newRow = [
+      generateUUID(),
+      guruId,
+      guruNama,
+      tanggalHariIni,
+      jamMasuk,
+      jamKeluar,
+      statusVerifikasi,
+      tipeVerifikasi,
+      catatanStatus,
+      isLembur ? 'Ya' : 'Tidak',
+      durasiLembur
+    ];
+
+    sheet.appendRow(newRow);
+
+    return createResponse(true, {
+      ID_Absensi: newRow[0],
+      Nama_Guru: guruNama,
+      Tanggal: tanggalHariIni,
+      Jam_Masuk: jamMasuk,
+      Jam_Keluar: jamKeluar,
+      Status_Verifikasi: statusVerifikasi,
+      Tipe_Verifikasi: tipeVerifikasi,
+      Is_Lembur: isLembur
+    }, 'Absensi berhasil tercatat. Notifikasi WA sedang dikirim...');
+
+  } catch (error) {
+    return createResponse(false, null, 'Error mencatat absensi: ' + error.message);
+  }
+}
+
+function checkIsLembur(tanggalStr) {
+  try {
+    const ss = getSpreadsheet();
+    const sheet = ss.getSheetByName('Hari_Libur');
+    const data = sheet.getDataRange().getValues();
+    
+    for (let i = 1; i < data.length; i++) {
+      const hariLibur = data[i][1];
+      if (hariLibur === tanggalStr) {
+        return true;
+      }
+    }
+    return false;
+  } catch (error) {
+    return false;
+  }
+}
+
+/**
+ * ============================================================
+ * DATA GURU — CRUD
+ * ============================================================
+ */
+
+function getAllGuru() {
+  try {
+    const ss = getSpreadsheet();
+    const sheet = ss.getSheetByName('Data_Guru');
+    const data = sheet.getDataRange().getValues();
+
+    if (data.length <= 1) {
+      return createResponse(true, [], 'Belum ada data guru.');
+    }
+
+    const headers = data[0];
+    const records = data.slice(1).map(row => {
+      const obj = {};
+      headers.forEach((h, i) => obj[h] = row[i]);
+      return obj;
+    });
+
+    return createResponse(true, records, 'OK');
+  } catch (error) {
+    return createResponse(false, null, error.message);
+  }
+}
+
+function addGuru(recordObj) {
+  const lock = LockService.getScriptLock();
+  try {
+    lock.waitLock(10000);
+
+    const ss = getSpreadsheet();
+    const sheet = ss.getSheetByName('Data_Guru');
+    const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
+
+    recordObj.ID = generateUUID();
+    if (!recordObj.Status_Aktif) recordObj.Status_Aktif = 'Aktif';
+    if (!recordObj.Tgl_Masuk) recordObj.Tgl_Masuk = new Date().toLocaleDateString('id-ID');
+
+    const newRow = headers.map(h => recordObj[h] || '');
+    sheet.appendRow(newRow);
+
+    return createResponse(true, recordObj, 'Data guru berhasil ditambahkan.');
+  } catch (error) {
+    return createResponse(false, null, error.message);
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+function updateGuru(recordObj) {
+  const lock = LockService.getScriptLock();
+  try {
+    lock.waitLock(10000);
+
+    const ss = getSpreadsheet();
+    const sheet = ss.getSheetByName('Data_Guru');
+    const data = sheet.getDataRange().getValues();
+    const headers = data[0];
+    const idCol = headers.indexOf('ID');
+
+    const rowIndex = data.findIndex((row, i) => i > 0 && row[idCol] === recordObj.ID);
+    if (rowIndex === -1) {
+      return createResponse(false, null, 'Data guru tidak ditemukan.');
+    }
+
+    const updatedRow = headers.map(h => 
+      recordObj[h] !== undefined ? recordObj[h] : data[rowIndex][headers.indexOf(h)]
+    );
+    sheet.getRange(rowIndex + 1, 1, 1, headers.length).setValues([updatedRow]);
+
+    return createResponse(true, recordObj, 'Data guru berhasil diperbarui.');
+  } catch (error) {
+    return createResponse(false, null, error.message);
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+function deleteGuru(id) {
+  const lock = LockService.getScriptLock();
+  try {
+    lock.waitLock(10000);
+
+    const ss = getSpreadsheet();
+    const sheet = ss.getSheetByName('Data_Guru');
+    const data = sheet.getDataRange().getValues();
+    const idCol = data[0].indexOf('ID');
+
+    const rowIndex = data.findIndex((row, i) => i > 0 && row[idCol] === id);
+    if (rowIndex === -1) {
+      return createResponse(false, null, 'Data guru tidak ditemukan.');
+    }
+
+    sheet.deleteRow(rowIndex + 1);
+    return createResponse(true, null, 'Data guru berhasil dihapus.');
+  } catch (error) {
+    return createResponse(false, null, error.message);
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+/**
+ * ============================================================
+ * REKAM ABSENSI — Review & Override
+ * ============================================================
+ */
+
+function getAbsensiByDate(tanggal) {
+  try {
+    const ss = getSpreadsheet();
+    const sheet = ss.getSheetByName('Rekam_Absensi');
+    const data = sheet.getDataRange().getValues();
+
+    if (data.length <= 1) {
+      return createResponse(true, [], 'Belum ada data absensi.');
+    }
+
+    const headers = data[0];
+    const records = data.slice(1)
+      .filter(row => row[3] === tanggal)
+      .map(row => {
+        const obj = {};
+        headers.forEach((h, i) => obj[h] = row[i]);
+        return obj;
+      });
+
+    return createResponse(true, records, 'OK');
+  } catch (error) {
+    return createResponse(false, null, error.message);
+  }
+}
+
+function overrideAbsensiStatus(idAbsensi, newStatus, catatan) {
+  const lock = LockService.getScriptLock();
+  try {
+    lock.waitLock(10000);
+
+    const ss = getSpreadsheet();
+    const sheet = ss.getSheetByName('Rekam_Absensi');
+    const data = sheet.getDataRange().getValues();
+    const headers = data[0];
+    const idCol = headers.indexOf('ID_Absensi');
+    const statusCol = headers.indexOf('Status_Verifikasi');
+    const catatanCol = headers.indexOf('Catatan_Status');
+
+    const rowIndex = data.findIndex((row, i) => i > 0 && row[idCol] === idAbsensi);
+    if (rowIndex === -1) {
+      return createResponse(false, null, 'Record absensi tidak ditemukan.');
+    }
+
+    data[rowIndex][statusCol] = newStatus;
+    data[rowIndex][catatanCol] = catatan;
+
+    sheet.getRange(rowIndex + 1, statusCol + 1).setValue(newStatus);
+    sheet.getRange(rowIndex + 1, catatanCol + 1).setValue(catatan);
+
+    return createResponse(true, null, 'Status absensi berhasil diubah.');
+  } catch (error) {
+    return createResponse(false, null, error.message);
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+/**
+ * ============================================================
+ * HARI LIBUR — Manage
+ * ============================================================
+ */
+
+function getAllHariLibur() {
+  try {
+    const ss = getSpreadsheet();
+    const sheet = ss.getSheetByName('Hari_Libur');
+    const data = sheet.getDataRange().getValues();
+
+    if (data.length <= 1) {
+      return createResponse(true, [], 'Belum ada data hari libur.');
+    }
+
+    const headers = data[0];
+    const records = data.slice(1).map(row => {
+      const obj = {};
+      headers.forEach((h, i) => obj[h] = row[i]);
+      return obj;
+    });
+
+    return createResponse(true, records, 'OK');
+  } catch (error) {
+    return createResponse(false, null, error.message);
+  }
+}
+
+function addHariLibur(recordObj) {
+  const lock = LockService.getScriptLock();
+  try {
+    lock.waitLock(10000);
+
+    const ss = getSpreadsheet();
+    const sheet = ss.getSheetByName('Hari_Libur');
+    const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
+
+    recordObj.ID = generateUUID();
+    recordObj.Dibuat_Oleh = Session.getActiveUser().getEmail();
+
+    const newRow = headers.map(h => recordObj[h] || '');
+    sheet.appendRow(newRow);
+
+    return createResponse(true, recordObj, 'Hari libur berhasil ditambahkan.');
+  } catch (error) {
+    return createResponse(false, null, error.message);
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+function deleteHariLibur(id) {
+  const lock = LockService.getScriptLock();
+  try {
+    lock.waitLock(10000);
+
+    const ss = getSpreadsheet();
+    const sheet = ss.getSheetByName('Hari_Libur');
+    const data = sheet.getDataRange().getValues();
+    const idCol = data[0].indexOf('ID');
+
+    const rowIndex = data.findIndex((row, i) => i > 0 && row[idCol] === id);
+    if (rowIndex === -1) {
+      return createResponse(false, null, 'Data hari libur tidak ditemukan.');
+    }
+
+    sheet.deleteRow(rowIndex + 1);
+    return createResponse(true, null, 'Data hari libur berhasil dihapus.');
+  } catch (error) {
+    return createResponse(false, null, error.message);
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+/**
+ * ============================================================
+ * LAPORAN — Dashboard & Analytics
+ * ============================================================
+ */
+
+function getDashboardData() {
+  try {
+    const ss = getSpreadsheet();
+    
+    // Data Guru
+    const guruSheet = ss.getSheetByName('Data_Guru');
+    const guruData = guruSheet.getDataRange().getValues();
+    const totalGuru = guruData.length > 1 ? guruData.length - 1 : 0;
+
+    // Rekam Absensi Hari Ini
+    const now = new Date().toLocaleDateString('id-ID');
+    const absensiSheet = ss.getSheetByName('Rekam_Absensi');
+    const absensiData = absensiSheet.getDataRange().getValues();
+    const absensiHariIni = absensiData.slice(1).filter(row => row[3] === now);
+    const totalAbsensiHariIni = absensiHariIni.length;
+    const berhasilHariIni = absensiHariIni.filter(row => row[6] === 'Berhasil').length;
+    const gagalHariIni = absensiHariIni.filter(row => row[6] === 'Gagal').length;
+
+    // Upcoming Holidays
+    const hariLiburSheet = ss.getSheetByName('Hari_Libur');
+    const hariLiburData = hariLiburSheet.getDataRange().getValues();
+    const upcomingHolidays = hariLiburData.slice(1).slice(0, 2); // Ambil 2 terdekat
+
+    // Insight Analytics
+    const insights = [];
+    if (berhasilHariIni > 0) {
+      insights.push(`Hari ini: ${berhasilHariIni} guru berhasil diverifikasi.`);
+    }
+    if (gagalHariIni > 0) {
+      insights.push(`⚠️ ${gagalHariIni} guru gagal verifikasi. Perlu review.`);
+    }
+    insights.push(`Total guru terdaftar: ${totalGuru}.`);
+
+    return createResponse(true, {
+      totalGuru: totalGuru,
+      absensiHariIni: totalAbsensiHariIni,
+      berhasilHariIni: berhasilHariIni,
+      gagalHariIni: gagalHariIni,
+      upcomingHolidays: upcomingHolidays.map(row => ({
+        tanggal: row[1],
+        keterangan: row[2],
+        tipe: row[3]
+      })),
+      insights: insights
+    }, 'OK');
+  } catch (error) {
+    return createResponse(false, null, error.message);
+  }
+}
+
+function getLaporanBulanan(bulan, tahun) {
+  try {
+    const ss = getSpreadsheet();
+    const sheet = ss.getSheetByName('Rekam_Absensi');
+    const data = sheet.getDataRange().getValues();
+    const headers = data[0];
+
+    // Filter by bulan & tahun
+    const records = data.slice(1).filter(row => {
+      const tanggal = new Date(row[3]);
+      return tanggal.getMonth() === bulan - 1 && tanggal.getFullYear() === tahun;
+    });
+
+    // Agregasi by guru
+    const guruStats = {};
+    records.forEach(row => {
+      const guruNama = row[2];
+      if (!guruStats[guruNama]) {
+        guruStats[guruNama] = {
+          nama: guruNama,
+          totalKehadiran: 0,
+          totalHariLibur: 0,
+          totalJamLembur: 0
+        };
+      }
+      if (row[6] === 'Berhasil') guruStats[guruNama].totalKehadiran++;
+      if (row[9] === 'Ya') guruStats[guruNama].totalJamLembur += row[10] || 0;
+    });
+
+    const laporanArray = Object.values(guruStats);
+
+    return createResponse(true, {
+      bulan: bulan,
+      tahun: tahun,
+      laporan: laporanArray,
+      chartData: {
+        labels: laporanArray.map(g => g.nama),
+        kehadiranData: laporanArray.map(g => g.totalKehadiran),
+        lemburData: laporanArray.map(g => g.totalJamLembur)
+      }
+    }, 'OK');
+  } catch (error) {
+    return createResponse(false, null, error.message);
+  }
+}
+
+/**
+ * ============================================================
+ * KONFIGURASI — AppConfig
+ * ============================================================
+ */
+
+function getConfig(key) {
+  try {
+    const ss = getSpreadsheet();
+    const sheet = ss.getSheetByName('AppConfig');
+    const data = sheet.getDataRange().getValues();
+    const row = data.find(r => r[0] === key);
+    return row ? row[1] : null;
+  } catch (error) {
+    return null;
+  }
+}
+
+function setConfig(key, value) {
+  try {
+    const ss = getSpreadsheet();
+    const sheet = ss.getSheetByName('AppConfig');
+    const data = sheet.getDataRange().getValues();
+    const rowIndex = data.findIndex(r => r[0] === key);
+
+    if (rowIndex >= 0) {
+      sheet.getRange(rowIndex + 1, 2).setValue(value);
+    } else {
+      sheet.appendRow([key, value]);
+    }
+    return createResponse(true, null, 'Konfigurasi disimpan.');
+  } catch (error) {
+    return createResponse(false, null, error.message);
+  }
+}
+
+function getAllConfig() {
+  try {
+    const ss = getSpreadsheet();
+    const sheet = ss.getSheetByName('AppConfig');
+    const data = sheet.getDataRange().getValues();
+    const config = {};
+    data.slice(1).forEach(row => config[row[0]] = row[1]);
+    return createResponse(true, config, 'OK');
+  } catch (error) {
+    return createResponse(false, null, error.message);
+  }
+}
+
+/**
+ * ============================================================
+ * USER MANAGEMENT
+ * ============================================================
+ */
+
+function getCurrentUserRole() {
+  try {
+    const userEmail = Session.getActiveUser().getEmail();
+    const ss = getSpreadsheet();
+    const sheet = ss.getSheetByName('Akun_Pengguna');
+    const data = sheet.getDataRange().getValues();
+    
+    const headers = data[0];
+    const emailCol = headers.indexOf('Email');
+    const roleCol = headers.indexOf('Role');
+
+    const userRow = data.slice(1).find(row => row[emailCol] === userEmail);
+    
+    if (!userRow) {
+      return createResponse(true, { role: 'Guest', email: userEmail }, 'User belum terdaftar.');
+    }
+
+    return createResponse(true, {
+      email: userEmail,
+      nama: userRow[headers.indexOf('Nama_Lengkap')] || '',
+      role: userRow[roleCol] || 'Guest',
+      status: userRow[headers.indexOf('Status')] || 'Tidak Aktif'
+    }, 'OK');
+  } catch (error) {
+    return createResponse(false, null, error.message);
+  }
+}
+
+function getAllAkunPengguna() {
+  try {
+    const ss = getSpreadsheet();
+    const sheet = ss.getSheetByName('Akun_Pengguna');
+    const data = sheet.getDataRange().getValues();
+
+    if (data.length <= 1) {
+      return createResponse(true, [], 'Belum ada data akun.');
+    }
+
+    const headers = data[0];
+    const records = data.slice(1).map(row => {
+      const obj = {};
+      headers.forEach((h, i) => obj[h] = row[i]);
+      return obj;
+    });
+
+    return createResponse(true, records, 'OK');
+  } catch (error) {
+    return createResponse(false, null, error.message);
+  }
+}
