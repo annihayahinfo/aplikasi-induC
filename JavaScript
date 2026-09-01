@@ -1,0 +1,904 @@
+<script>
+/**
+ * ============================================================
+ * JAVASCRIPT — Sistem Absensi Kantor
+ * SPA Routing, Backend Integration, Charts, Webcam
+ * ============================================================
+ */
+
+// ─── Global State ─── 
+let currentUser = null;
+let currentRole = 'Guest';
+let currentSection = 'dashboard';
+let chartInstances = {};
+let webcamStream = null;
+
+// ─── Init ─── 
+document.addEventListener('DOMContentLoaded', () => {
+  console.log('🚀 Aplikasi dimulai...');
+  
+  // Set default bulan laporan
+  const today = new Date();
+  document.getElementById('reviewDate').valueAsDate = today;
+  document.getElementById('laporanBulan').value = today.getMonth() + 1;
+  document.getElementById('laporanTahun').value = today.getFullYear();
+
+  // Setup dark mode
+  const savedTheme = localStorage.getItem('theme') || 'light';
+  document.documentElement.setAttribute('data-theme', savedTheme);
+  document.getElementById('darkModeToggle').checked = savedTheme === 'dark';
+
+  // Get current user & init UI
+  google.script.run
+    .withSuccessHandler(onGetCurrentUserSuccess)
+    .withFailureHandler(onError)
+    .getCurrentUserRole();
+});
+
+/**
+ * ============================================================
+ * USER & AUTH
+ * ============================================================
+ */
+
+function onGetCurrentUserSuccess(response) {
+  if (response.success) {
+    currentUser = response.data;
+    currentRole = response.data.role;
+    console.log('✅ User logged in:', currentUser);
+
+    // Update UI
+    document.getElementById('userNameDisplay').textContent = currentUser.nama || currentUser.email;
+    
+    // Setup menu based on role
+    setupMenuByRole(currentRole);
+
+    // Load initial dashboard
+    loadDashboard();
+
+    // Hide loading
+    document.getElementById('loadingOverlay').style.display = 'none';
+  } else {
+    showToast('Error: ' + response.message, 'danger');
+  }
+}
+
+function setupMenuByRole(role) {
+  const menuHtml = {
+    'Guru': `
+      <li><a class="nav-link" href="#" onclick="navigateTo('absensi')"><i class="bi bi-camera-video"></i> <span>Absensi</span></a></li>
+      <li><a class="nav-link" href="#" onclick="navigateTo('pengaturan')"><i class="bi bi-gear"></i> <span>Pengaturan</span></a></li>
+    `,
+    'Admin': `
+      <li><a class="nav-link" href="#" onclick="navigateTo('dashboard')"><i class="bi bi-speedometer2"></i> <span>Dashboard</span></a></li>
+      <li><a class="nav-link" href="#" onclick="navigateTo('review')"><i class="bi bi-clipboard-check"></i> <span>Review</span></a></li>
+      <li><a class="nav-link" href="#" onclick="navigateTo('data-guru')"><i class="bi bi-people"></i> <span>Data Guru</span></a></li>
+      <li><a class="nav-link" href="#" onclick="navigateTo('laporan')"><i class="bi bi-graph-up"></i> <span>Laporan</span></a></li>
+      <li><a class="nav-link" href="#" onclick="navigateTo('pengaturan')"><i class="bi bi-gear"></i> <span>Pengaturan</span></a></li>
+    `,
+    'TU': `
+      <li><a class="nav-link" href="#" onclick="navigateTo('dashboard')"><i class="bi bi-speedometer2"></i> <span>Dashboard</span></a></li>
+      <li><a class="nav-link" href="#" onclick="navigateTo('review')"><i class="bi bi-clipboard-check"></i> <span>Review</span></a></li>
+      <li><a class="nav-link" href="#" onclick="navigateTo('data-guru')"><i class="bi bi-people"></i> <span>Data Guru</span></a></li>
+      <li><a class="nav-link" href="#" onclick="navigateTo('laporan')"><i class="bi bi-graph-up"></i> <span>Laporan</span></a></li>
+    `,
+    'Admin Super': `
+      <li><a class="nav-link" href="#" onclick="navigateTo('dashboard')"><i class="bi bi-speedometer2"></i> <span>Dashboard</span></a></li>
+      <li><a class="nav-link" href="#" onclick="navigateTo('review')"><i class="bi bi-clipboard-check"></i> <span>Review</span></a></li>
+      <li><a class="nav-link" href="#" onclick="navigateTo('data-guru')"><i class="bi bi-people"></i> <span>Data Guru</span></a></li>
+      <li><a class="nav-link" href="#" onclick="navigateTo('hari-libur')"><i class="bi bi-calendar-event"></i> <span>Hari Libur</span></a></li>
+      <li><a class="nav-link" href="#" onclick="navigateTo('laporan')"><i class="bi bi-graph-up"></i> <span>Laporan</span></a></li>
+      <li><a class="nav-link" href="#" onclick="navigateTo('pengaturan')"><i class="bi bi-gear"></i> <span>Pengaturan</span></a></li>
+    `,
+    'Kepala Sekolah': `
+      <li><a class="nav-link" href="#" onclick="navigateTo('dashboard')"><i class="bi bi-speedometer2"></i> <span>Dashboard</span></a></li>
+      <li><a class="nav-link" href="#" onclick="navigateTo('laporan')"><i class="bi bi-graph-up"></i> <span>Laporan</span></a></li>
+    `,
+    'Guest': `
+      <li><p class="text-center text-muted mt-3">User belum terdaftar.</p></li>
+    `
+  };
+
+  const sidebarMenu = document.getElementById('sidebarMenu');
+  sidebarMenu.innerHTML = menuHtml[role] || menuHtml['Guest'];
+
+  // Show admin-only settings
+  if (role === 'Admin Super') {
+    document.getElementById('adminOnlySection').style.display = 'block';
+  }
+}
+
+/**
+ * ============================================================
+ * NAVIGATION & ROUTING
+ * ============================================================
+ */
+
+function navigateTo(sectionId) {
+  // Hide all sections
+  document.querySelectorAll('.content-section').forEach(el => {
+    el.classList.remove('active');
+  });
+
+  // Show selected section
+  const section = document.getElementById(`section-${sectionId}`);
+  if (section) {
+    section.classList.add('active');
+    currentSection = sectionId;
+
+    // Update sidebar active state
+    document.querySelectorAll('.nav-link').forEach(link => {
+      link.classList.remove('active');
+    });
+    event.target.closest('.nav-link')?.classList.add('active');
+
+    // Update page title
+    document.getElementById('pageTitle').textContent = 
+      sectionId.charAt(0).toUpperCase() + sectionId.slice(1).replace('-', ' ');
+
+    // Load section data
+    loadSectionData(sectionId);
+
+    // Close sidebar on mobile
+    if (window.innerWidth < 768) {
+      document.getElementById('sidebar').style.display = 'none';
+    }
+  }
+}
+
+function toggleSidebar() {
+  const sidebar = document.getElementById('sidebar');
+  sidebar.style.display = sidebar.style.display === 'none' ? 'block' : 'none';
+}
+
+function loadSectionData(sectionId) {
+  switch (sectionId) {
+    case 'dashboard':
+      loadDashboard();
+      break;
+    case 'absensi':
+      initWebcam();
+      break;
+    case 'review':
+      loadReviewAbsensi();
+      break;
+    case 'data-guru':
+      loadDataGuru();
+      break;
+    case 'hari-libur':
+      loadHariLibur();
+      break;
+    case 'laporan':
+      // Will load when user clicks "Tampilkan Laporan"
+      break;
+    case 'pengaturan':
+      loadPengaturan();
+      break;
+  }
+}
+
+/**
+ * ============================================================
+ * DASHBOARD
+ * ============================================================
+ */
+
+function loadDashboard() {
+  google.script.run
+    .withSuccessHandler(onDashboardSuccess)
+    .withFailureHandler(onError)
+    .getDashboardData();
+}
+
+function onDashboardSuccess(response) {
+  if (response.success) {
+    const data = response.data;
+
+    // Update KPI Cards
+    const kpiHtml = `
+      <div class="col-md-6 col-lg-3 mb-3">
+        <div class="stat-card">
+          <div class="stat-icon"><i class="bi bi-people"></i></div>
+          <div class="stat-value">${data.totalGuru}</div>
+          <div class="stat-label">Total Guru</div>
+          <small class="text-muted">Terdaftar</small>
+        </div>
+      </div>
+      <div class="col-md-6 col-lg-3 mb-3">
+        <div class="stat-card">
+          <div class="stat-icon"><i class="bi bi-check-circle" style="color: #10b981;"></i></div>
+          <div class="stat-value" style="color: #10b981;">${data.berhasilHariIni}</div>
+          <div class="stat-label">Berhasil Hari Ini</div>
+          <small class="text-muted">Terverifikasi</small>
+        </div>
+      </div>
+      <div class="col-md-6 col-lg-3 mb-3">
+        <div class="stat-card">
+          <div class="stat-icon"><i class="bi bi-exclamation-circle" style="color: #ef4444;"></i></div>
+          <div class="stat-value" style="color: #ef4444;">${data.gagalHariIni}</div>
+          <div class="stat-label">Gagal Hari Ini</div>
+          <small class="text-muted">Perlu Review</small>
+        </div>
+      </div>
+      <div class="col-md-6 col-lg-3 mb-3">
+        <div class="stat-card">
+          <div class="stat-icon"><i class="bi bi-calendar-event"></i></div>
+          <div class="stat-value">${data.upcomingHolidays.length}</div>
+          <div class="stat-label">Upcoming Holidays</div>
+          <small class="text-muted">Mendatang</small>
+        </div>
+      </div>
+    `;
+    document.getElementById('kpiContainer').innerHTML = kpiHtml;
+
+    // Update Recent Activity (max 5)
+    const activityRows = data.insights.slice(0, 5).map(insight => `
+      <tr>
+        <td colspan="3" class="text-muted small">${insight}</td>
+      </tr>
+    `).join('');
+    document.getElementById('recentActivityList').innerHTML = activityRows || '<tr><td colspan="3" class="text-center text-muted">Tidak ada aktivitas</td></tr>';
+
+    // Update Insights List
+    const insightsList = data.insights.map(insight => `
+      <li>${insight}</li>
+    `).join('');
+    document.getElementById('insightsList').innerHTML = insightsList;
+
+    // Daily Chart (dummy data for now)
+    drawDailyChart([95, 92, 90, 88, 85, 80, 78]);
+  }
+}
+
+function drawDailyChart(data) {
+  const ctx = document.getElementById('dailyChart');
+  if (!ctx) return;
+
+  // Destroy previous chart
+  if (chartInstances.daily) {
+    chartInstances.daily.destroy();
+  }
+
+  chartInstances.daily = new Chart(ctx, {
+    type: 'line',
+    data: {
+      labels: ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'],
+      datasets: [{
+        label: 'Success Rate (%)',
+        data: data,
+        borderColor: '#1e3a8a',
+        backgroundColor: 'rgba(30, 58, 138, 0.1)',
+        tension: 0.4,
+        fill: true,
+        pointRadius: 4,
+        pointBackgroundColor: '#1e3a8a'
+      }]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: true,
+      plugins: {
+        legend: { display: false }
+      },
+      scales: {
+        y: {
+          beginAtZero: true,
+          max: 100,
+          ticks: {
+            callback: function(value) { return value + '%'; }
+          }
+        }
+      }
+    }
+  });
+}
+
+/**
+ * ============================================================
+ * ABSENSI — WEBCAM & VERIFICATION
+ * ============================================================
+ */
+
+function initWebcam() {
+  const video = document.getElementById('webcamVideo');
+  
+  if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+    navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user' } })
+      .then(stream => {
+        webcamStream = stream;
+        video.srcObject = stream;
+        console.log('✅ Webcam initialized');
+      })
+      .catch(err => {
+        console.error('❌ Webcam error:', err);
+        showToast('Tidak dapat mengakses kamera. Periksa izin browser.', 'danger');
+      });
+  } else {
+    showToast('Browser tidak mendukung webcam', 'danger');
+  }
+}
+
+function verifyFace() {
+  // Simulasi verifikasi wajah
+  const confidence = Math.floor(Math.random() * 30) + 80; // 80-110%
+  const isMatch = confidence >= 95;
+
+  document.getElementById('faceDetectionStatus').textContent = isMatch ? '✅ Cocok' : '❌ Tidak Cocok';
+  document.getElementById('faceConfidence').textContent = confidence;
+  document.getElementById('faceDetected').textContent = isMatch ? '✅ Yes' : '❌ No';
+  document.getElementById('confidenceLevel').textContent = confidence;
+
+  if (isMatch) {
+    // Record attendance
+    google.script.run
+      .withSuccessHandler(onAbsensiSuccess)
+      .withFailureHandler(onError)
+      .recordAbsensi(
+        currentUser.email,
+        currentUser.nama,
+        'Wajah',
+        'Berhasil',
+        `Match ${confidence}%`
+      );
+  } else {
+    showToast('Verifikasi gagal. Coba lagi.', 'warning');
+  }
+}
+
+function verifyFingerprint() {
+  // Simulasi verifikasi sidik jari
+  const isMatch = Math.random() > 0.3; // 70% success rate
+
+  if (isMatch) {
+    google.script.run
+      .withSuccessHandler(onAbsensiSuccess)
+      .withFailureHandler(onError)
+      .recordAbsensi(
+        currentUser.email,
+        currentUser.nama,
+        'Sidik Jari',
+        'Berhasil',
+        'Sidik jari cocok'
+      );
+  } else {
+    showToast('Verifikasi sidik jari gagal. Coba wajah atau ulangi.', 'warning');
+  }
+}
+
+function onAbsensiSuccess(response) {
+  if (response.success) {
+    showToast('✅ ' + response.message, 'success');
+    console.log('Absensi record:', response.data);
+    
+    // Show confirmation modal
+    setTimeout(() => {
+      showAbsensiConfirmation(response.data);
+    }, 1000);
+  } else {
+    showToast('❌ Error: ' + response.message, 'danger');
+  }
+}
+
+function showAbsensiConfirmation(data) {
+  const html = `
+    <div class="alert alert-success" role="alert">
+      <h5><i class="bi bi-check-circle"></i> Verifikasi Berhasil</h5>
+      <p><strong>Nama:</strong> ${data.Nama_Guru}</p>
+      <p><strong>Tanggal:</strong> ${data.Tanggal}</p>
+      <p><strong>Jam Masuk:</strong> ${data.Jam_Masuk}</p>
+      <p><strong>Status:</strong> ${data.Status_Verifikasi}</p>
+      <p class="mb-0 small text-muted">Notifikasi WhatsApp telah dikirim ke nomor terdaftar.</p>
+    </div>
+  `;
+  // Display in alert area or modal
+  showToast('Absensi tercatat: ' + data.Nama_Guru, 'success');
+}
+
+/**
+ * ============================================================
+ * REVIEW ABSENSI
+ * ============================================================
+ */
+
+function loadReviewAbsensi() {
+  const tanggal = document.getElementById('reviewDate').value;
+  console.log('Loading review for:', tanggal);
+
+  google.script.run
+    .withSuccessHandler(onReviewAbsensiSuccess)
+    .withFailureHandler(onError)
+    .getAbsensiByDate(tanggal);
+}
+
+function onReviewAbsensiSuccess(response) {
+  if (response.success) {
+    const records = response.data;
+    let html = '';
+
+    if (records.length === 0) {
+      html = '<tr><td colspan="7" class="text-center text-muted">Belum ada data absensi untuk tanggal ini.</td></tr>';
+    } else {
+      html = records.map(record => `
+        <tr>
+          <td><strong>${record.Nama_Guru}</strong></td>
+          <td>${record.Tanggal}</td>
+          <td>${record.Jam_Masuk}</td>
+          <td>${record.Jam_Keluar || '--'}</td>
+          <td>
+            <span class="badge" style="background: ${record.Tipe_Verifikasi === 'Wajah' ? '#0ea5e9' : '#f59e0b'};">
+              ${record.Tipe_Verifikasi}
+            </span>
+          </td>
+          <td>
+            <span class="badge ${record.Status_Verifikasi === 'Berhasil' ? 'badge-success' : 'badge-danger'}">
+              ${record.Status_Verifikasi}
+            </span>
+          </td>
+          <td>
+            <button class="btn btn-sm btn-outline-primary" onclick="editAbsensi('${record.ID_Absensi}')">
+              Detail
+            </button>
+          </td>
+        </tr>
+      `).join('');
+    }
+
+    document.getElementById('reviewTable').innerHTML = html;
+  }
+}
+
+function editAbsensi(idAbsensi) {
+  // Store ID and open override modal
+  window.currentAbsensiId = idAbsensi;
+  bootstrap.Modal.getOrCreateInstance(document.getElementById('overrideModal')).show();
+}
+
+function submitOverride() {
+  const status = document.getElementById('overrideStatus').value;
+  const catatan = document.getElementById('overrideCatatan').value;
+
+  google.script.run
+    .withSuccessHandler((response) => {
+      if (response.success) {
+        showToast('Status absensi berhasil diubah', 'success');
+        bootstrap.Modal.getInstance(document.getElementById('overrideModal')).hide();
+        loadReviewAbsensi();
+      }
+    })
+    .withFailureHandler(onError)
+    .overrideAbsensiStatus(window.currentAbsensiId, status, catatan);
+}
+
+/**
+ * ============================================================
+ * DATA GURU
+ * ============================================================
+ */
+
+function loadDataGuru() {
+  google.script.run
+    .withSuccessHandler(onDataGuruSuccess)
+    .withFailureHandler(onError)
+    .getAllGuru();
+}
+
+function onDataGuruSuccess(response) {
+  if (response.success) {
+    const records = response.data;
+    let html = '';
+
+    if (records.length === 0) {
+      html = '<tr><td colspan="8" class="text-center text-muted">Belum ada data guru.</td></tr>';
+    } else {
+      html = records.map(record => `
+        <tr>
+          <td><small>${record.ID?.slice(0, 8)}</small></td>
+          <td>
+            <div class="d-flex align-items-center gap-2">
+              <img src="${record.Foto_Wajah_URL || 'https://via.placeholder.com/32'}" 
+                   alt="${record.Nama}" style="width: 32px; height: 32px; border-radius: 50%; object-fit: cover;">
+              <strong>${record.Nama}</strong>
+            </div>
+          </td>
+          <td><small>${record.NIP}</small></td>
+          <td><small>${record.Email}</small></td>
+          <td><small>${record.No_HP}</small></td>
+          <td>
+            <small>
+              ${record.Foto_Wajah_URL ? '✅ Wajah' : '❌ Wajah'}
+              ${record.Data_Sidik_Jari ? ' ✅ Sidik' : ' ❌ Sidik'}
+            </small>
+          </td>
+          <td>
+            <span class="badge ${record.Status_Aktif === 'Aktif' ? 'badge-success' : 'badge-secondary'}">
+              ${record.Status_Aktif}
+            </span>
+          </td>
+          <td>
+            <div class="btn-group btn-group-sm" role="group">
+              <button class="btn btn-outline-primary" onclick="editGuruModal('${record.ID}')">Edit</button>
+              <button class="btn btn-outline-danger" onclick="deleteGuru('${record.ID}')">Hapus</button>
+            </div>
+          </td>
+        </tr>
+      `).join('');
+    }
+
+    document.getElementById('guruTable').innerHTML = html;
+  }
+}
+
+function openAddGuruModal() {
+  document.getElementById('formAddGuru').reset();
+  bootstrap.Modal.getOrCreateInstance(document.getElementById('addGuruModal')).show();
+}
+
+function submitAddGuru() {
+  const form = document.getElementById('formAddGuru');
+  const formData = new FormData(form);
+  
+  const guru = {
+    Nama: formData.get('Nama'),
+    NIP: formData.get('NIP'),
+    Email: formData.get('Email'),
+    No_HP: formData.get('No_HP'),
+    Status_Aktif: 'Aktif'
+  };
+
+  google.script.run
+    .withSuccessHandler((response) => {
+      if (response.success) {
+        showToast('Guru berhasil ditambahkan', 'success');
+        bootstrap.Modal.getInstance(document.getElementById('addGuruModal')).hide();
+        loadDataGuru();
+      } else {
+        showToast('Error: ' + response.message, 'danger');
+      }
+    })
+    .withFailureHandler(onError)
+    .addGuru(guru);
+}
+
+function deleteGuru(id) {
+  if (confirm('Yakin ingin menghapus guru ini?')) {
+    google.script.run
+      .withSuccessHandler((response) => {
+        if (response.success) {
+          showToast('Guru berhasil dihapus', 'success');
+          loadDataGuru();
+        }
+      })
+      .withFailureHandler(onError)
+      .deleteGuru(id);
+  }
+}
+
+/**
+ * ============================================================
+ * HARI LIBUR
+ * ============================================================
+ */
+
+function loadHariLibur() {
+  google.script.run
+    .withSuccessHandler(onHariLiburSuccess)
+    .withFailureHandler(onError)
+    .getAllHariLibur();
+}
+
+function onHariLiburSuccess(response) {
+  if (response.success) {
+    const records = response.data;
+    let html = '';
+
+    if (records.length === 0) {
+      html = '<tr><td colspan="5" class="text-center text-muted">Belum ada data hari libur.</td></tr>';
+    } else {
+      html = records.map(record => `
+        <tr>
+          <td><strong>${record.Tanggal}</strong></td>
+          <td>${record.Keterangan}</td>
+          <td>
+            <span class="badge badge-info">
+              ${record.Tipe}
+            </span>
+          </td>
+          <td><small>${record.Dibuat_Oleh}</small></td>
+          <td>
+            <button class="btn btn-sm btn-outline-danger" onclick="deleteHariLibur('${record.ID}')">
+              Hapus
+            </button>
+          </td>
+        </tr>
+      `).join('');
+    }
+
+    document.getElementById('hariLiburTable').innerHTML = html;
+  }
+}
+
+function openAddHariLiburModal() {
+  document.getElementById('formAddHariLibur').reset();
+  bootstrap.Modal.getOrCreateInstance(document.getElementById('addHariLiburModal')).show();
+}
+
+function submitAddHariLibur() {
+  const form = document.getElementById('formAddHariLibur');
+  const formData = new FormData(form);
+
+  const hariLibur = {
+    Tanggal: formData.get('Tanggal'),
+    Keterangan: formData.get('Keterangan'),
+    Tipe: formData.get('Tipe')
+  };
+
+  google.script.run
+    .withSuccessHandler((response) => {
+      if (response.success) {
+        showToast('Hari libur berhasil ditambahkan', 'success');
+        bootstrap.Modal.getInstance(document.getElementById('addHariLiburModal')).hide();
+        loadHariLibur();
+      }
+    })
+    .withFailureHandler(onError)
+    .addHariLibur(hariLibur);
+}
+
+function deleteHariLibur(id) {
+  if (confirm('Yakin ingin menghapus hari libur ini?')) {
+    google.script.run
+      .withSuccessHandler((response) => {
+        if (response.success) {
+          showToast('Hari libur berhasil dihapus', 'success');
+          loadHariLibur();
+        }
+      })
+      .withFailureHandler(onError)
+      .deleteHariLibur(id);
+  }
+}
+
+/**
+ * ============================================================
+ * LAPORAN
+ * ============================================================
+ */
+
+function loadLaporan() {
+  const bulan = parseInt(document.getElementById('laporanBulan').value);
+  const tahun = parseInt(document.getElementById('laporanTahun').value);
+
+  google.script.run
+    .withSuccessHandler(onLaporanSuccess)
+    .withFailureHandler(onError)
+    .getLaporanBulanan(bulan, tahun);
+}
+
+function onLaporanSuccess(response) {
+  if (response.success) {
+    const data = response.data;
+    const chartData = data.chartData;
+
+    // Draw Kehadiran Chart
+    drawKehadiranChart(chartData.labels, chartData.kehadiranData);
+
+    // Draw Lembur Chart
+    drawLemburChart(chartData.labels, chartData.lemburData);
+
+    // Fill table
+    let html = '';
+    data.laporan.forEach(item => {
+      html += `
+        <tr>
+          <td><strong>${item.nama}</strong></td>
+          <td>${item.totalKehadiran}</td>
+          <td>${item.totalHariLibur}</td>
+          <td>${item.totalJamLembur.toFixed(1)} jam</td>
+        </tr>
+      `;
+    });
+    document.getElementById('laporanTable').innerHTML = html || '<tr><td colspan="4" class="text-center text-muted">Tidak ada data</td></tr>';
+
+    showToast('Laporan berhasil dimuat', 'success');
+  }
+}
+
+function drawKehadiranChart(labels, data) {
+  const ctx = document.getElementById('kehadiranChart');
+  if (!ctx) return;
+
+  if (chartInstances.kehadiran) {
+    chartInstances.kehadiran.destroy();
+  }
+
+  chartInstances.kehadiran = new Chart(ctx, {
+    type: 'bar',
+    data: {
+      labels: labels,
+      datasets: [{
+        label: 'Total Kehadiran',
+        data: data,
+        backgroundColor: '#1e3a8a',
+        borderRadius: 4
+      }]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: true,
+      plugins: {
+        legend: { display: false }
+      },
+      scales: {
+        y: { beginAtZero: true }
+      }
+    }
+  });
+}
+
+function drawLemburChart(labels, data) {
+  const ctx = document.getElementById('lemburChart');
+  if (!ctx) return;
+
+  if (chartInstances.lembur) {
+    chartInstances.lembur.destroy();
+  }
+
+  chartInstances.lembur = new Chart(ctx, {
+    type: 'bar',
+    data: {
+      labels: labels,
+      datasets: [{
+        label: 'Jam Lembur',
+        data: data,
+        backgroundColor: '#f59e0b',
+        borderRadius: 4
+      }]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: true,
+      plugins: {
+        legend: { display: false }
+      },
+      scales: {
+        y: { beginAtZero: true }
+      }
+    }
+  });
+}
+
+/**
+ * ============================================================
+ * PENGATURAN
+ * ============================================================
+ */
+
+function loadPengaturan() {
+  google.script.run
+    .withSuccessHandler((response) => {
+      if (response.success) {
+        const config = response.data;
+        document.getElementById('configAppName').value = config.appName || '';
+        document.getElementById('configLogoUrl').value = config.logoUrl || '';
+        document.getElementById('configWhatsappProvider').value = config.whatsappProvider || 'twilio';
+        document.getElementById('configWhatsappKey').value = config.whatsappApiKey ? '••••••' : '';
+      }
+    })
+    .withFailureHandler(onError)
+    .getAllConfig();
+
+  // Load akun pengguna (untuk Admin Super)
+  if (currentRole === 'Admin Super') {
+    google.script.run
+      .withSuccessHandler((response) => {
+        if (response.success) {
+          const records = response.data;
+          let html = '';
+          records.forEach(record => {
+            html += `
+              <tr>
+                <td>${record.Email}</td>
+                <td>${record.Nama_Lengkap}</td>
+                <td><span class="badge badge-info">${record.Role}</span></td>
+                <td><span class="badge ${record.Status === 'Aktif' ? 'badge-success' : 'badge-secondary'}">${record.Status}</span></td>
+              </tr>
+            `;
+          });
+          document.getElementById('akunTable').innerHTML = html;
+        }
+      })
+      .withFailureHandler(onError)
+      .getAllAkunPengguna();
+  }
+}
+
+function saveConfig() {
+  const appName = document.getElementById('configAppName').value;
+  const logoUrl = document.getElementById('configLogoUrl').value;
+  const whatsappProvider = document.getElementById('configWhatsappProvider').value;
+  const whatsappKey = document.getElementById('configWhatsappKey').value;
+
+  // Save each config item
+  google.script.run.setConfig('appName', appName);
+  google.script.run.setConfig('logoUrl', logoUrl);
+  google.script.run.setConfig('whatsappProvider', whatsappProvider);
+  
+  if (whatsappKey && whatsappKey !== '••••••') {
+    google.script.run.setConfig('whatsappApiKey', whatsappKey);
+  }
+
+  showToast('Pengaturan berhasil disimpan', 'success');
+}
+
+/**
+ * ============================================================
+ * UTILITIES
+ * ============================================================
+ */
+
+function showToast(message, type = 'info') {
+  const toastId = 'toast-' + Date.now();
+  const html = `
+    <div id="${toastId}" class="toast show" role="alert">
+      <div class="toast-header">
+        <strong class="me-auto">
+          ${type === 'success' ? '✅' : type === 'danger' ? '❌' : type === 'warning' ? '⚠️' : 'ℹ️'}
+          ${type.charAt(0).toUpperCase() + type.slice(1)}
+        </strong>
+        <button type="button" class="btn-close" onclick="document.getElementById('${toastId}').remove()"></button>
+      </div>
+      <div class="toast-body">${message}</div>
+    </div>
+  `;
+
+  document.getElementById('toastContainer').insertAdjacentHTML('beforeend', html);
+
+  // Auto remove after 5 seconds
+  setTimeout(() => {
+    const el = document.getElementById(toastId);
+    if (el) el.remove();
+  }, 5000);
+}
+
+function onError(error) {
+  console.error('❌ Error:', error);
+  showToast('Error: ' + (error.message || error), 'danger');
+}
+
+function toggleDarkMode() {
+  const currentTheme = document.documentElement.getAttribute('data-theme');
+  const newTheme = currentTheme === 'dark' ? 'light' : 'dark';
+  document.documentElement.setAttribute('data-theme', newTheme);
+  localStorage.setItem('theme', newTheme);
+}
+
+// Webcam cleanup
+window.addEventListener('beforeunload', () => {
+  if (webcamStream) {
+    webcamStream.getTracks().forEach(track => track.stop());
+  }
+});
+
+// Date input event listeners
+document.addEventListener('DOMContentLoaded', () => {
+  const reviewDate = document.getElementById('reviewDate');
+  if (reviewDate) {
+    reviewDate.addEventListener('change', loadReviewAbsensi);
+  }
+
+  const guruSearch = document.getElementById('guruSearch');
+  if (guruSearch) {
+    guruSearch.addEventListener('input', filterDataGuru);
+  }
+});
+
+function filterDataGuru() {
+  const searchTerm = document.getElementById('guruSearch').value.toLowerCase();
+  const rows = document.querySelectorAll('#guruTable tr');
+  
+  rows.forEach(row => {
+    const text = row.textContent.toLowerCase();
+    row.style.display = text.includes(searchTerm) ? '' : 'none';
+  });
+}
+</script>
