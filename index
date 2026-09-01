@@ -1,0 +1,615 @@
+<!DOCTYPE html>
+<html lang="id" data-theme="light">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Sistem Absensi Kantor</title>
+
+  <!-- Bootstrap 5 CSS -->
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+  <!-- Bootstrap Icons -->
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css" rel="stylesheet">
+  <!-- Google Fonts (Inter) -->
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  <!-- Chart.js untuk Laporan -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+
+  <?!= include('Stylesheet') ?>
+</head>
+<body>
+
+  <!-- Loading Overlay -->
+  <div id="loadingOverlay" class="loading-overlay">
+    <div class="spinner-border text-primary" role="status">
+      <span class="visually-hidden">Memuat...</span>
+    </div>
+    <p class="mt-3">Memuat aplikasi...</p>
+  </div>
+
+  <!-- Sidebar Navigation (Desktop) -->
+  <nav id="sidebar" class="sidebar">
+    <div class="sidebar-header">
+      <div class="app-logo">
+        <i class="bi bi-shield-check" style="font-size: 2rem; color: #1e3a8a;"></i>
+      </div>
+      <h5 id="appTitle">Sistem Absensi</h5>
+      <small id="userNameDisplay">Loading...</small>
+    </div>
+    
+    <ul class="sidebar-nav" id="sidebarMenu">
+      <!-- Menu will be populated by JavaScript based on role -->
+    </ul>
+
+    <!-- Dark Mode Toggle -->
+    <div class="sidebar-footer">
+      <div class="form-check form-switch">
+        <input class="form-check-input" type="checkbox" id="darkModeToggle" onchange="toggleDarkMode()">
+        <label class="form-check-label" for="darkModeToggle">
+          <i class="bi bi-moon-stars"></i> Mode Gelap
+        </label>
+      </div>
+      <div style="margin-top: 1rem; padding-top: 1rem; border-top: 1px solid rgba(255,255,255,0.1);">
+        <small style="color: var(--sidebar-text);">v1.0</small>
+      </div>
+    </div>
+  </nav>
+
+  <!-- Main Content Area -->
+  <main id="mainContent" class="main-content">
+
+    <!-- Top Bar (Mobile) -->
+    <div class="topbar d-md-none">
+      <button class="btn btn-link" onclick="toggleSidebar()">
+        <i class="bi bi-list fs-4"></i>
+      </button>
+      <h6 id="pageTitle" class="mb-0">Dashboard</h6>
+      <button class="btn btn-link" onclick="toggleDarkMode()">
+        <i class="bi bi-moon-stars"></i>
+      </button>
+    </div>
+
+    <!-- Toast Container -->
+    <div id="toastContainer" class="toast-container position-fixed bottom-0 end-0 p-3"></div>
+
+    <!-- ─────────────────────────────────────────────────────────────
+         SECTION: DASHBOARD
+         ───────────────────────────────────────────────────────────── -->
+    <section id="section-dashboard" class="content-section active">
+      <div class="page-header mb-4">
+        <h2>Dashboard</h2>
+        <p class="text-muted">Pantau aktivitas verifikasi hari ini</p>
+      </div>
+
+      <!-- KPI Cards -->
+      <div class="row mb-4" id="kpiContainer">
+        <!-- Populated by JS -->
+      </div>
+
+      <!-- Daily Overview & Recent Activity -->
+      <div class="row">
+        <div class="col-lg-6 mb-4">
+          <div class="card">
+            <div class="card-header">
+              <h6 class="mb-0">Daily Overview</h6>
+            </div>
+            <div class="card-body">
+              <canvas id="dailyChart" height="80"></canvas>
+            </div>
+          </div>
+        </div>
+        <div class="col-lg-6 mb-4">
+          <div class="card">
+            <div class="card-header d-flex justify-content-between align-items-center">
+              <h6 class="mb-0">Recent Verification Activity</h6>
+              <a href="#" onclick="navigateTo('review')" class="link-primary">View All</a>
+            </div>
+            <div class="card-body p-0">
+              <table class="table table-sm table-hover mb-0">
+                <thead>
+                  <tr>
+                    <th>Guru</th>
+                    <th>Waktu</th>
+                    <th>Status</th>
+                  </tr>
+                </thead>
+                <tbody id="recentActivityList">
+                  <!-- Populated by JS -->
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- AI Insights -->
+      <div class="insight-card">
+        <h6><i class="bi bi-lightbulb"></i> Insights</h6>
+        <ul id="insightsList">
+          <!-- Populated by JS -->
+        </ul>
+      </div>
+    </section>
+
+    <!-- ─────────────────────────────────────────────────────────────
+         SECTION: ABSENSI (untuk Guru)
+         ───────────────────────────────────────────────────────────── -->
+    <section id="section-absensi" class="content-section">
+      <div class="page-header mb-4">
+        <h2>Absensi Wajah & Sidik Jari</h2>
+        <p class="text-muted">Verifikasi kehadiran Anda</p>
+      </div>
+
+      <div class="row">
+        <!-- Facial Recognition -->
+        <div class="col-lg-6 mb-4">
+          <div class="card">
+            <div class="card-header">
+              <h6 class="mb-0"><i class="bi bi-camera-video"></i> Facial Verification</h6>
+              <small class="text-muted">LIVE FEED</small>
+            </div>
+            <div class="card-body">
+              <video id="webcamVideo" width="100%" height="300" style="background: #000; border-radius: 8px; border: 3px solid #1e3a8a;" playsinline></video>
+              <div class="mt-3 p-3 bg-light rounded">
+                <p><strong>Status:</strong> <span id="faceDetectionStatus">Menunggu...</span></p>
+                <p><strong>Confidence:</strong> <span id="faceConfidence">--</span>%</p>
+                <button class="btn btn-primary w-100 mt-2" onclick="verifyFace()">
+                  <i class="bi bi-check-circle"></i> Verifikasi Wajah
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Fingerprint -->
+        <div class="col-lg-6 mb-4">
+          <div class="card">
+            <div class="card-header">
+              <h6 class="mb-0"><i class="bi bi-fingerprint"></i> Verification Status</h6>
+            </div>
+            <div class="card-body text-center">
+              <div class="p-5">
+                <p><strong>Face Detected:</strong> <span id="faceDetected">❌ No</span></p>
+                <p><strong>Confidence Level:</strong> <span id="confidenceLevel">--</span>%</p>
+                <div class="mt-4">
+                  <div class="fingerprint-icon" style="font-size: 3rem;">
+                    <i class="bi bi-fingerprint"></i>
+                  </div>
+                  <p class="mt-3 text-muted">Letakkan jari di sensor (jika tersedia)</p>
+                </div>
+                <button class="btn btn-success w-100 mt-3" onclick="verifyFingerprint()">
+                  <i class="bi bi-check-circle"></i> Verifikasi Sidik Jari
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ─────────────────────────────────────────────────────────────
+         SECTION: REVIEW (untuk Admin, TU, Admin Super)
+         ───────────────────────────────────────────────────────────── -->
+    <section id="section-review" class="content-section">
+      <div class="page-header mb-4">
+        <h2>Review Status Verifikasi</h2>
+        <p class="text-muted">Pantau dan verifikasi catatan absensi harian</p>
+      </div>
+
+      <div class="card mb-4">
+        <div class="card-body">
+          <div class="row g-3">
+            <div class="col-md-4">
+              <label class="form-label">Tanggal</label>
+              <input type="date" id="reviewDate" class="form-control" value="">
+            </div>
+            <div class="col-md-4">
+              <label class="form-label">Status</label>
+              <select id="reviewStatus" class="form-select">
+                <option value="">Semua Status</option>
+                <option value="Berhasil">Berhasil</option>
+                <option value="Gagal">Gagal</option>
+              </select>
+            </div>
+            <div class="col-md-4">
+              <label class="form-label">Cari Guru</label>
+              <input type="text" id="reviewSearch" class="form-control" placeholder="Nama atau NIP...">
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="table-responsive">
+        <table class="table table-hover">
+          <thead>
+            <tr>
+              <th>Guru</th>
+              <th>Tanggal</th>
+              <th>Jam Masuk</th>
+              <th>Jam Keluar</th>
+              <th>Tipe</th>
+              <th>Status</th>
+              <th>Aksi</th>
+            </tr>
+          </thead>
+          <tbody id="reviewTable">
+            <tr>
+              <td colspan="7" class="text-center text-muted">Muat data untuk melihat absensi...</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- ─────────────────────────────────────────────────────────────
+         SECTION: DATA GURU (untuk Admin Super)
+         ───────────────────────────────────────────────────────────── -->
+    <section id="section-data-guru" class="content-section">
+      <div class="page-header mb-4">
+        <h2>Teacher Directory</h2>
+        <p class="text-muted">Kelola data guru dan status biometrik</p>
+        <button class="btn btn-primary mt-2" onclick="openAddGuruModal()">
+          <i class="bi bi-plus-circle"></i> Tambah Guru Baru
+        </button>
+      </div>
+
+      <div class="card mb-4">
+        <div class="card-body">
+          <div class="row g-3">
+            <div class="col-md-8">
+              <label class="form-label">Cari Guru</label>
+              <input type="text" id="guruSearch" class="form-control" placeholder="Nama, NIP, atau Email...">
+            </div>
+            <div class="col-md-4">
+              <label class="form-label">Filter Status</label>
+              <select id="guruStatusFilter" class="form-select">
+                <option value="">Semua Status</option>
+                <option value="Aktif">Aktif</option>
+                <option value="Tidak Aktif">Tidak Aktif</option>
+              </select>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="table-responsive">
+        <table class="table table-hover">
+          <thead>
+            <tr>
+              <th>ID</th>
+              <th>Nama</th>
+              <th>NIP</th>
+              <th>Email</th>
+              <th>No HP</th>
+              <th>Biometrik</th>
+              <th>Status</th>
+              <th>Aksi</th>
+            </tr>
+          </thead>
+          <tbody id="guruTable">
+            <tr>
+              <td colspan="8" class="text-center text-muted">Muat data guru...</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- ─────────────────────────────────────────────────────────────
+         SECTION: HARI LIBUR (untuk Admin Super)
+         ───────────────────────────────────────────────────────────── -->
+    <section id="section-hari-libur" class="content-section">
+      <div class="page-header mb-4">
+        <h2>Manajemen Hari Libur</h2>
+        <p class="text-muted">Input dan kelola hari libur & cuti khusus</p>
+        <button class="btn btn-primary mt-2" onclick="openAddHariLiburModal()">
+          <i class="bi bi-plus-circle"></i> Tambah Hari Libur
+        </button>
+      </div>
+
+      <div class="table-responsive">
+        <table class="table table-hover">
+          <thead>
+            <tr>
+              <th>Tanggal</th>
+              <th>Keterangan</th>
+              <th>Tipe</th>
+              <th>Dibuat Oleh</th>
+              <th>Aksi</th>
+            </tr>
+          </thead>
+          <tbody id="hariLiburTable">
+            <tr>
+              <td colspan="5" class="text-center text-muted">Muat data hari libur...</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- ─────────────────────────────────────────────────────────────
+         SECTION: LAPORAN (untuk semua role)
+         ───────────────────────────────────────────────────────────── -->
+    <section id="section-laporan" class="content-section">
+      <div class="page-header mb-4">
+        <h2>Laporan Bulanan</h2>
+        <p class="text-muted">Analisis kehadiran dan lembur per guru</p>
+      </div>
+
+      <div class="card mb-4">
+        <div class="card-body">
+          <div class="row g-3">
+            <div class="col-md-3">
+              <label class="form-label">Bulan</label>
+              <select id="laporanBulan" class="form-select">
+                <option value="1">Januari</option>
+                <option value="2">Februari</option>
+                <option value="3">Maret</option>
+                <option value="4">April</option>
+                <option value="5">Mei</option>
+                <option value="6">Juni</option>
+                <option value="7">Juli</option>
+                <option value="8">Agustus</option>
+                <option value="9">September</option>
+                <option value="10">Oktober</option>
+                <option value="11">November</option>
+                <option value="12">Desember</option>
+              </select>
+            </div>
+            <div class="col-md-3">
+              <label class="form-label">Tahun</label>
+              <input type="number" id="laporanTahun" class="form-control" value="2024">
+            </div>
+            <div class="col-md-6 d-flex align-items-end">
+              <button class="btn btn-primary w-100" onclick="loadLaporan()">
+                <i class="bi bi-search"></i> Tampilkan Laporan
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Charts -->
+      <div class="row mb-4">
+        <div class="col-lg-6 mb-4">
+          <div class="card">
+            <div class="card-header">
+              <h6 class="mb-0">Kehadiran Per Guru</h6>
+            </div>
+            <div class="card-body">
+              <canvas id="kehadiranChart" height="80"></canvas>
+            </div>
+          </div>
+        </div>
+        <div class="col-lg-6 mb-4">
+          <div class="card">
+            <div class="card-header">
+              <h6 class="mb-0">Lembur Per Guru</h6>
+            </div>
+            <div class="card-body">
+              <canvas id="lemburChart" height="80"></canvas>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Tabel Detail -->
+      <div class="table-responsive">
+        <table class="table table-hover">
+          <thead>
+            <tr>
+              <th>Guru</th>
+              <th>Total Kehadiran</th>
+              <th>Total Hari Libur</th>
+              <th>Total Jam Lembur</th>
+            </tr>
+          </thead>
+          <tbody id="laporanTable">
+            <tr>
+              <td colspan="4" class="text-center text-muted">Pilih bulan & tahun untuk melihat laporan...</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- ─────────────────────────────────────────────────────────────
+         SECTION: PENGATURAN
+         ───────────────────────────────────────────────────────────── -->
+    <section id="section-pengaturan" class="content-section">
+      <div class="page-header mb-4">
+        <h2>Pengaturan</h2>
+        <p class="text-muted">Konfigurasi aplikasi & manajemen akun</p>
+      </div>
+
+      <div class="row">
+        <div class="col-lg-6 mb-4">
+          <div class="card">
+            <div class="card-header">
+              <h6 class="mb-0">Identitas Aplikasi</h6>
+            </div>
+            <div class="card-body">
+              <div class="mb-3">
+                <label class="form-label">Nama Aplikasi</label>
+                <input type="text" id="configAppName" class="form-control" value="Sistem Absensi Kantor">
+              </div>
+              <div class="mb-3">
+                <label class="form-label">URL Logo</label>
+                <input type="text" id="configLogoUrl" class="form-control" placeholder="https://...">
+              </div>
+              <button class="btn btn-success" onclick="saveConfig()">
+                <i class="bi bi-check-circle"></i> Simpan
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <div class="col-lg-6 mb-4">
+          <div class="card">
+            <div class="card-header">
+              <h6 class="mb-0">Integrasi WhatsApp</h6>
+            </div>
+            <div class="card-body">
+              <div class="mb-3">
+                <label class="form-label">API Provider</label>
+                <select id="configWhatsappProvider" class="form-select">
+                  <option value="twilio">Twilio</option>
+                  <option value="messagebird">MessageBird</option>
+                  <option value="custom">Custom</option>
+                </select>
+              </div>
+              <div class="mb-3">
+                <label class="form-label">API Key</label>
+                <input type="password" id="configWhatsappKey" class="form-control" placeholder="••••••">
+              </div>
+              <button class="btn btn-success" onclick="saveConfig()">
+                <i class="bi bi-check-circle"></i> Simpan
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <div class="col-lg-12 mb-4" id="adminOnlySection" style="display: none;">
+          <div class="card">
+            <div class="card-header">
+              <h6 class="mb-0">Manajemen Akun Pengguna</h6>
+            </div>
+            <div class="card-body">
+              <div class="table-responsive">
+                <table class="table table-sm">
+                  <thead>
+                    <tr>
+                      <th>Email</th>
+                      <th>Nama</th>
+                      <th>Role</th>
+                      <th>Status</th>
+                    </tr>
+                  </thead>
+                  <tbody id="akunTable">
+                    <tr>
+                      <td colspan="4" class="text-center text-muted">Muat data akun...</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+  </main>
+
+  <!-- Modals -->
+  <!-- Add Guru Modal -->
+  <div class="modal fade" id="addGuruModal" tabindex="-1">
+    <div class="modal-dialog modal-dialog-centered">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h5 class="modal-title">Tambah Guru Baru</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+        </div>
+        <div class="modal-body">
+          <form id="formAddGuru">
+            <div class="mb-3">
+              <label class="form-label">Nama Lengkap</label>
+              <input type="text" name="Nama" class="form-control" required>
+            </div>
+            <div class="mb-3">
+              <label class="form-label">NIP</label>
+              <input type="text" name="NIP" class="form-control" required>
+            </div>
+            <div class="mb-3">
+              <label class="form-label">Email</label>
+              <input type="email" name="Email" class="form-control" required>
+            </div>
+            <div class="mb-3">
+              <label class="form-label">No HP (WhatsApp)</label>
+              <input type="tel" name="No_HP" class="form-control" placeholder="+62...">
+            </div>
+            <div class="mb-3">
+              <label class="form-label">Upload Foto Wajah</label>
+              <input type="file" name="Foto_Wajah" class="form-control" accept="image/*">
+            </div>
+          </form>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Batal</button>
+          <button type="button" class="btn btn-primary" onclick="submitAddGuru()">Simpan</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Add Hari Libur Modal -->
+  <div class="modal fade" id="addHariLiburModal" tabindex="-1">
+    <div class="modal-dialog modal-dialog-centered">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h5 class="modal-title">Tambah Hari Libur</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+        </div>
+        <div class="modal-body">
+          <form id="formAddHariLibur">
+            <div class="mb-3">
+              <label class="form-label">Tanggal</label>
+              <input type="date" name="Tanggal" class="form-control" required>
+            </div>
+            <div class="mb-3">
+              <label class="form-label">Keterangan</label>
+              <input type="text" name="Keterangan" class="form-control" placeholder="Hari Raya, Cuti Khusus, dll." required>
+            </div>
+            <div class="mb-3">
+              <label class="form-label">Tipe</label>
+              <select name="Tipe" class="form-select" required>
+                <option value="Libur Nasional">Libur Nasional</option>
+                <option value="Libur Lokal">Libur Lokal</option>
+                <option value="Cuti Khusus">Cuti Khusus</option>
+              </select>
+            </div>
+          </form>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Batal</button>
+          <button type="button" class="btn btn-primary" onclick="submitAddHariLibur()">Simpan</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Override Verifikasi Modal -->
+  <div class="modal fade" id="overrideModal" tabindex="-1">
+    <div class="modal-dialog modal-dialog-centered">
+      <div class="modal-content">
+        <div class="modal-header">
+          <h5 class="modal-title">Override Verifikasi</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+        </div>
+        <div class="modal-body">
+          <form id="formOverride">
+            <div class="mb-3">
+              <label class="form-label">Status Baru</label>
+              <select id="overrideStatus" class="form-select" required>
+                <option value="Berhasil">Berhasil</option>
+                <option value="Gagal">Gagal</option>
+              </select>
+            </div>
+            <div class="mb-3">
+              <label class="form-label">Catatan</label>
+              <textarea id="overrideCatatan" class="form-control" rows="3" placeholder="Alasan perubahan status..." required></textarea>
+            </div>
+          </form>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Batal</button>
+          <button type="button" class="btn btn-primary" onclick="submitOverride()">Simpan</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Bootstrap JS -->
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+  
+  <?!= include('JavaScript') ?>
+</body>
+</html>
